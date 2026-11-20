@@ -679,10 +679,9 @@ function dueAccounts(options = {}) {
   return customers;
 }
 const DUE_REPORT_COLUMNS = [
-  'S.No.', 'Code', 'Party Name', 'Village', 'Last Paid', 'Inst Date', 'EMI', 'Inst', 'Amt Due', 'DP_AmtDue', 'Date', 'Remarks',
-  'Hirer Name', 'Doc Number', 'Agreement Date', 'Vehicle Type', 'Vehicle Name', 'Paid Date', 'Due Date', 'Current EMI No.',
-  'Over Due EMIs', 'Opening Balance Amount', 'Last Month Paid Receipt', 'Current Month EMI', 'NET Total Pending Amount',
-  'Loan Status', 'Net OD', 'Telephone', 'RegNo', 'PTP', 'Visit Date'
+  'S.No.', 'Party Name', 'Doc No.', 'Agreement Date', 'Vehicle Type (2W/4W)', 'Vehicle Name', 'Vehicle No.',
+  'Total Installments', 'EMI', 'DP Due', 'Due Date', 'Last Month Paid', 'Current Month EMI',
+  'Net Total Pending Amt.', 'Net OD', 'Phone No.', 'Remarks'
 ];
 function dueReportMatrix(options = {}) {
   const onDate = options.onDate || isoDate();
@@ -692,37 +691,31 @@ function dueReportMatrix(options = {}) {
   const dateKey = (date) => isoDate(date);
   const fromMonth = dateKey(previousMonthStart);
   const toPreviousMonth = dateKey(new Date(monthStart.getTime() - 86400000));
-  const currentMonthStart = dateKey(monthStart);
   const dueCustomers = dueAccounts(options);
   const rows = dueCustomers.map((customer, index) => {
     const collections = store.transactions.filter((transaction) => transaction.code === customer.code && transaction.type === 'Collection' && transaction.narration !== 'Initial down payment' && !transaction.returned && transaction.date <= onDate);
-    const orderedCollections = [...collections].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.id || '').localeCompare(a.id || ''));
-    const lastCollection = orderedCollections[0];
     const previousMonthCollections = collections.filter((transaction) => transaction.date >= fromMonth && transaction.date <= toPreviousMonth);
-    const currentMonthCollections = collections.filter((transaction) => transaction.date >= currentMonthStart && transaction.date <= onDate);
     const previousMonthPaid = previousMonthCollections.reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0);
-    const currentMonthPaid = currentMonthCollections.reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0);
     const overdueInstallments = customer.nextDue && customer.nextDue <= onDate
       ? Math.floor((reportDate - new Date(`${customer.nextDue}T00:00:00`)) / (30 * 86400000)) + 1
       : 0;
-    const installmentsPaid = Math.min(Number(customer.months) || 0, Math.floor((Number(customer.paid) || 0) / Math.max(1, Number(customer.emi) || 1)));
     const accountBalance = Math.max(0, (Number(customer.totalPayable) || 0) - (Number(customer.paid) || 0));
-    const openingPaid = Math.max(0, (Number(customer.paid) || 0) - currentMonthPaid);
-    const openingBalance = Math.max(0, (Number(customer.totalPayable) || 0) - openingPaid);
     const lastMonthReceipt = previousMonthCollections.length
       ? `${previousMonthCollections.map((transaction) => transaction.id).join(', ')} · ₹${previousMonthPaid.toLocaleString('en-IN')}`
       : '';
-    const amountDue = options.mode === 'dp' ? Number(customer.dpDue) || 0 : accountBalance;
     const netPending = accountBalance + (Number(customer.dpDue) || 0);
     const netOverdue = Math.min(accountBalance, overdueInstallments * (Number(customer.emi) || 0));
     const agreementDate = customer.financeDate || customer.created || '';
+    const rawVehicleType = String(customer.vehicleType || '');
+    const vehicleType = /motorcycle|scooter|two.?wheeler/i.test(rawVehicleType) ? '2W'
+      : /three.?wheeler/i.test(rawVehicleType) ? '3W'
+      : /car|commercial|four.?wheeler/i.test(rawVehicleType) ? '4W'
+      : rawVehicleType;
     return [
-      index + 1, customer.code, customer.name, customer.village || '', lastCollection?.date || '', customer.nextDue || '', Number(customer.emi) || 0,
-      Number(customer.months) || 0, amountDue, Number(customer.dpDue) || 0, onDate, customer.remarks || customer.notes || '',
-      customer.name, customer.docNumber || customer.ledgerCode || customer.code, agreementDate, customer.vehicleType || '', [customer.vehicle, customer.vehicleModel].filter(Boolean).join(' '), lastCollection?.date || '',
-      customer.nextDue || '', Math.min(Number(customer.months) || 0, installmentsPaid + 1), overdueInstallments, openingBalance, lastMonthReceipt,
-      Number(customer.emi) || 0, netPending, customer.status || 'Active', netOverdue, [customer.phone, customer.phoneR, customer.phoneO].filter(Boolean).join(' / '),
-      customer.regNo || '', customer.ptp || '', customer.visitDate || ''
+      index + 1, customer.name, customer.docNumber || customer.accountNo || customer.ledgerCode || customer.code, agreementDate, vehicleType,
+      [customer.vehicle, customer.vehicleModel].filter(Boolean).join(' '), customer.regNo || '', Number(customer.months) || 0,
+      Number(customer.emi) || 0, Number(customer.dpDue) || 0, customer.nextDue || '', previousMonthPaid,
+      Number(customer.emi) || 0, netPending, netOverdue, customer.phone || customer.phoneR || customer.phoneO || '', customer.remarks || customer.notes || ''
     ];
   });
   return [DUE_REPORT_COLUMNS, ...rows];
@@ -1247,9 +1240,9 @@ function renderDueList() {
   if(reportSummary)reportSummary.textContent=`${names[options.mode]||names.all} · ${accounts.length} account${accounts.length===1?'':'s'} · Page ${options.pageNo || '1'}`;
   if(printTable){
     const matrix=dueReportMatrix(options);
-    printTable.innerHTML=matrix.slice(1).map((row)=>`<tr>${row.map((value)=>{
+    printTable.innerHTML=matrix.slice(1).map((row)=>`<tr>${row.map((value,index)=>{
       const text=String(value??'');
-      const printValue=/^\d{4}-\d{2}-\d{2}$/.test(text)?`${text.slice(8,10)}-${text.slice(5,7)}-${text.slice(0,4)}`:text;
+      const printValue=[8,9,11,12,13,14].includes(index)?money(value):/^\d{4}-\d{2}-\d{2}$/.test(text)?`${text.slice(8,10)}-${text.slice(5,7)}-${text.slice(0,4)}`:text;
       return `<td>${esc(printValue)}</td>`;
     }).join('')}</tr>`).join('');
   }
